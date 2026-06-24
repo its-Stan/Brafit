@@ -1,34 +1,44 @@
 const std = @import("std");
 
+const testing = std.testing;
+const eql = std.mem.eql;
+
 const ContentError = error { NoFileProvided, UnclosedLoop, InexistantLoop };
 const nb_cells = 32768;
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
-
-    var args = try std.process.ArgIterator.initWithAllocator(allocator);
-    defer args.deinit();
-
+pub fn main(init: std.process.Init) !void {
+    var args = init.minimal.args.iterate();
     _ = args.next();
+
     const filepath = args.next();
 
     if (filepath == null) {
         return ContentError.NoFileProvided;
     }
 
-    const input_file = try std.fs.cwd().openFile(filepath.?, .{});
-    defer input_file.close();
+    const io = init.io;
+    const allocator = init.arena.allocator();
 
-    const fstat = try input_file.stat();
-    const content = try input_file.readToEndAlloc(allocator, fstat.size);
+    const content = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        filepath.?,
+        allocator,
+        .unlimited
+    );
+
     defer allocator.free(content);
+
+    var readBuffer: [1024]u8 = undefined;
+    var writeBuffer: [1024]u8 = undefined;
+
+    var stdinReader = std.Io.File.stdin().reader(io, &readBuffer).interface;
+    var stdoutWriter = std.Io.File.stdout().writer(io, &writeBuffer).interface;
 
     try interpret(
         content,
-        std.io.getStdIn().reader().any(),
-        std.io.getStdOut().writer().any()
+        allocator,
+        &stdinReader,
+        &stdoutWriter
     );
 }
 
@@ -42,25 +52,14 @@ inline fn bounded_decrement(value: usize, cap: usize) usize {
 
 fn interpret(
     content: []const u8,
-    rstream: std.io.AnyReader,
-    ostream: std.io.AnyWriter
+    allocator: std.mem.Allocator,
+    reader: *std.Io.Reader,
+    writer: *std.Io.Writer
 ) !void {
-    var buf_read = std.io.bufferedReader(rstream);
-    var buf_writ = std.io.bufferedWriter(ostream);
-
-    const reader = buf_read.reader();
-    const writer = buf_writ.writer();
-
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var stack = std.ArrayList(usize).init(gpa.allocator());
-
-    defer {
-        stack.deinit();
-        _ = gpa.deinit();
-    }
+    var stack: std.ArrayList(usize) = .empty;
+    defer stack.deinit(allocator);
 
     var array = std.mem.zeroes([nb_cells]u8);
-
     var pointer: usize = 0;
     var content_pos: usize = 0;
 
@@ -71,7 +70,7 @@ fn interpret(
             '+' => array[pointer] +%= 1,
             '-' => array[pointer] -%= 1,
             '.' => try writer.writeByte(array[pointer]),
-            ',' => array[pointer] = try reader.readByte(),
+            ',' => array[pointer] = try reader.takeByte(),
             '[' => if (array[pointer] == 0) {
                 var loops: usize = 1;
                 content_pos += 1;
@@ -92,7 +91,7 @@ fn interpret(
                     return ContentError.UnclosedLoop;
                 }
             } else {
-                try stack.append(content_pos);
+                try stack.append(allocator, content_pos);
             },
             ']' => if (array[pointer] == 0) {
                 _ = stack.pop() orelse return ContentError.InexistantLoop;
@@ -106,14 +105,10 @@ fn interpret(
         content_pos += 1;
     }
 
-    try buf_writ.flush();
+    try writer.flush();
 }
 
 test "hello world" {
-    const allocator = std.testing.allocator;
-    var buffer = try std.ArrayList(u8).initCapacity(allocator, 16);
-    defer buffer.deinit();
-
     const content =
         \\ ++++++++++
         \\ [>+++++++>++++++++++>+++>+<<<<-]
@@ -121,12 +116,21 @@ test "hello world" {
         \\ +++++++++++++++.>.+++.------.--------.>+.>.
     ;
 
+    const allocator = testing.allocator;
+
+    var internalBuffer = try std.ArrayList(u8).initCapacity(allocator, 16);
+    var bufferWriter = std.Io.Writer.fromArrayList(&internalBuffer);
+
     // Reader is not used in this test
     try interpret(
         content,
-        std.io.getStdIn().reader().any(),
-        buffer.writer().any()
+        allocator,
+        std.Io.Reader.ending,
+        &bufferWriter
     );
 
-    try std.testing.expect(std.mem.eql(u8, buffer.items, "Hello World!\n"));
+    internalBuffer = bufferWriter.toArrayList();
+    defer internalBuffer.deinit(allocator);
+
+    try testing.expect(eql(u8, internalBuffer.items, "Hello World!\n"));
 }

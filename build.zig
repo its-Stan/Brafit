@@ -10,7 +10,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const exe = b.addExecutable(.{ .name = "bfi", .root_module = exe_mod, });
+    const exe = b.addExecutable(.{ .name = "brafit", .root_module = exe_mod, });
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);

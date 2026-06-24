@@ -1,5 +1,6 @@
-# BFI
+# Brafit
 
-Simple BrainF#ck Interpreter written in Zig 0.14.1.<br />
-The project can be built using `zig build` and used with `./bfi <filepath>`.<br />
-Number of cells can be changed with the nb\_cells constant.
+Zig written BRAinFuck InTerpreter.
+The build is done using the zig cli with `zig build [--release]`.
+The executable output take a filepath pointing to the source file as input.
+The output of the executable is the execution of the Brainfuck source code, using stdin as input, and stdout as output.
